@@ -35,7 +35,7 @@ const char* client_id  = "Metertrekker";
   #define RTS_LOW LOW
 #endif
 
-#define RTS_PIN D3
+#define RTS_PIN 18
 
 /* Rx pin for SoftwareSerial */
 #define RX_PIN RX

@@ -21,7 +21,9 @@ To get nice graphs out of it, check my [Metergrafiekjes docker configuration]!
 
 ## Compatibility & Hardware
 
-Written for and tested on Wemos D1 mini v2, should work on any ESP8266 derived device.
+Written for and tested on Wemos S2 mini, might work on any ESP32 derived device.
+
+For ESP8266 support, look at older versions. But larger telegrams may not fit in the smaller buffer.
 
 The RTS needs 5V input to be triggered. This means that if you use an ESP or other
 microcontroller that works on 3.3V, you will need a level shifter or an RTL inverter

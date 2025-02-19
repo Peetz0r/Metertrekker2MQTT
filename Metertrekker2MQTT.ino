@@ -1,8 +1,8 @@
 #include <WiFiSettings.h>
-#include <LittleFS.h>
+#include <SPIFFS.h>
 #include <ArduinoOTA.h>
 #include <MQTT.h>
-#include <SoftwareSerial.h>
+#include <HardwareSerial.h>
 
 #include "Crc16.h"
 Crc16 CRC;
@@ -10,7 +10,7 @@ Crc16 CRC;
 #include "settings.h"
 
 WiFiClient network;
-MQTTClient mqttClient(1024);    // specify buffer size
+MQTTClient mqttClient(4096);    // specify buffer size
 
 
 /* The following settings can be set in the WiFi portal but default to values in settings.h */
@@ -24,7 +24,7 @@ String mqtt_notify_topic;
 #endif
 
 
-SoftwareSerial P1;
+HardwareSerial P1(0);
 
 
 /* Helper functions/macros */
@@ -40,7 +40,7 @@ void set_RTS(bool s)
 
 // Return string content from stored file
 String slurp(const String& fn) {
-    File f = LittleFS.open(fn, "r");
+    File f = SPIFFS.open(fn, "r");
     String r = f.readString();
     f.close();
     return r;
@@ -48,7 +48,7 @@ String slurp(const String& fn) {
 
 // Store string to file
 void spurt(const String& fn, const String& content) {
-    File f = LittleFS.open(fn, "w");
+    File f = SPIFFS.open(fn, "w");
     f.print(content);
     f.close();
 }
@@ -60,6 +60,7 @@ bool mqtt_publish(const String &topic_path, const String &message, bool retain =
 
 unsigned int interval;
 unsigned int timeout;
+unsigned int wifi_timeout;
 
 int dsmr_version = -1;
 
@@ -71,15 +72,15 @@ void setup()
     pinMode(RTS_PIN, OUTPUT);
     set_RTS(LOW);
 
-    LittleFS.begin();  // Will format on the first run after failing to mount
+    SPIFFS.begin(true);  // Will format on the first run after failing to mount
     setup_wifi();
     setup_ota();
 
     mqttClient.begin(mqtt_host.c_str(), network);
     connect_mqtt();
 
-    P1.begin(115200, SWSERIAL_8N1, RX_PIN, -1, true, 768);  // Tx disabled
-    P1.setTimeout(50);
+    P1.begin(115200, SERIAL_8N1, RX_PIN, -1, true, 4096);  // Tx disabled
+    P1.setTimeout(250);
 }
 
 
@@ -100,14 +101,15 @@ void loop()
 
         while (P1.available()) {
             if (P1.peek() == '/') {     // check for telegram header
-                char buffer_in[768];
-                size_t read_length = P1.readBytesUntil('!', buffer_in, 766);
+                char buffer_in[4096];
+                size_t read_length = P1.readBytesUntil('!', buffer_in, 4094);
                 buffer_in[read_length++] = '!';
                 buffer_in[read_length] = 0;
 
                 set_RTS(LOW);
 
                 Serial.printf("Telegram length: %zu\n", read_length);
+                Serial.printf("DSMR version: %d\n", dsmr_version);
 
                 bool telegram_valid;
                 if (dsmr_version >= 40) {   // before DSMR 4.0, telegrams did not contain a CRC tag at the end
@@ -423,7 +425,7 @@ void append_influx_value(String &influxString, char* column_name, String value, 
 // WiFi and MQTT setup functions
 
 void setup_wifi() {
-    WiFiSettings.hostname = Sprintf("%s-%06" PRIx32, client_id, ESP.getChipId());
+    WiFiSettings.hostname = Sprintf("%s-%06" PRIx32, client_id, ESP.getChipModel());
 
     mqtt_host = WiFiSettings.string("mqtt-host", d_mqtt_host, F("MQTT server host"));
     mqtt_topic_root = WiFiSettings.string("mqtt-root", d_mqtt_topic_root, F("MQTT topic root"));
@@ -438,11 +440,14 @@ void setup_wifi() {
             WiFiSettings.string("influx-gas-measurement", d_influx_gas_measurement, F("Influx gas measurement"));
     #endif
 
-    interval = WiFiSettings.integer("fetch-interval", 10, 3600, d_interval, F("Measuring interval"));
-    timeout = WiFiSettings.integer("fetch-timeout", 10, 120, d_timeout, F("Timeout to portal"));
+    interval = WiFiSettings.integer("fetch-interval", 0, 3600, d_interval, F("Measuring interval"));
+    timeout = WiFiSettings.integer("fetch-timeout", 10, 3600, d_timeout, F("Timeout (no telegrams) to portal"));
+    wifi_timeout = WiFiSettings.integer("wifi-timeout", 10, 3600, d_timeout, F("Timeout (no wifi) to portal"));
 
     interval *= 1000;   // seconds -> milliseconds
     timeout *= 1000;
+    
+    if (interval == 0) interval = 500; // this helps with measuring every telegram if there is one every second
 
     WiFiSettings.onPortal = []() {
         setup_ota();
@@ -479,8 +484,8 @@ void connect_mqtt()
         Serial.print('.');
         delay(500);
 
-        // start portal after 30 seconds without connectivity
-        if (millis() - connection_lose_time > 30e3) WiFiSettings.portal();
+        // start portal after some time without connectivity
+        if (millis() - connection_lose_time > (wifi_timeout*1000)) WiFiSettings.portal();
     }
     Serial.println();
 
